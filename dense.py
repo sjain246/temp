@@ -7,16 +7,16 @@ import torch.nn.functional as F
 from torch.utils.data import random_split, DataLoader
 from torchvision import transforms
 from torchvision.models import densenet121
-import os
 
 import time
+import os
 
-name = 'densenet_indv_all'
+name = 'densenet_all'
 
 all_data = True
-n_examples = 7500
+n_examples = 20000
 
-n_split = 0
+n_split = 0.1
 
 n_epochs = 20
 
@@ -33,48 +33,29 @@ weight_decay = 1e-4
 step_size = 5
 gamma = 0.7
 
-transform = transforms.Compose([
-                     transforms.Resize((224, 224)),
-                     transforms.Normalize([123.1379],
-                                          [77.6652]),
-                     transforms.Lambda(
-                        lambda x: x.repeat(3,1,1)
-                     )
-                 ])
+transform=transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.Normalize([123.1379],[77.6652]),
+    transforms.Lambda(
+        lambda x: x.repeat(3,1,1)
+    )
+])
 
 cuda = torch.cuda.is_available()
 
 print(cuda)
 print(torch.cuda.device_count())
 
-cats = [
-    'No Finding',
-    'Enlarged Cardiomediastinum',
-    'Cardiomegaly',
-    'Lung Opacity',
-    'Lung Lesion',
-    'Edema',
-    'Consolidation',
-    'Pneumonia',
-    'Atelectasis',
-    'Pneumothorax',
-    'Pleural Effusion',
-    'Pleural Other',
-    'Fracture',
-    'Support Devices'
-]
-
 class DenseNet(nn.Module):
     #This defines the structure of the NN.
     def __init__(self):
         super(DenseNet,self).__init__()
         
-        # If we want to do the 5 channel crop thing, here is where to add the layer
         # self.c1 = nn.Conv2d(5, 3, kernel_size=3)
-        self.densenet121 = densenet121(pretrained=True)       
+        self.densenet121 = densenet121(pretrained=False)       
         num_features = self.densenet121.classifier.in_features
         self.densenet121.classifier = nn.Sequential(
-            nn.Linear(num_features, 1),
+            nn.Linear(num_features, 14),
             nn.Tanh()
         )
 
@@ -83,265 +64,226 @@ class DenseNet(nn.Module):
         x = self.densenet121(x)
         return x
 
-frontal_datasets = {}
+if all_data:
+    sample = 'all'
+else:
+    sample = 'random'
 
-lateral_datasets = {}
+frontal_dataset = utils.CheXDataset(csv_file='train.csv',
+                                    data_dir='/groups/CS156b/data/',
+                                    n_samples=n_examples,
+                                    sample_type=sample,
+                                    xray_type='frontal',
+                                    pathology='all',
+                                    fill_type='zero',
+                                    transform=transform
+                                    )
 
-for cat in cats:
-    if all_data:
-        sample = 'all'
-    else:
-        sample = 'random'
-        
-    frontal_datasets[cat] = utils.CheXDataset(csv_file='train.csv',
-                                             data_dir='/groups/CS156b/data/',
-                                             n_samples=n_examples,
-                                             sample_type=sample,
-                                             xray_type='frontal',
-                                             pathology=cat,
-                                             fill_type='exclude',
-                                             transform=transform)
-    
-    lateral_datasets[cat] = utils.CheXDataset(csv_file='train.csv',
-                                             data_dir='/groups/CS156b/data/',
-                                             n_samples=n_examples,
-                                             sample_type=sample,
-                                             xray_type='lateral',
-                                             pathology=cat,
-                                             fill_type='exclude',
-                                             transform=transform)
-    
-    print(cat)
-    print(len(frontal_datasets[cat]))
-    print(len(lateral_datasets[cat]))
+lateral_dataset = utils.CheXDataset(csv_file='train.csv',
+                                    data_dir='/groups/CS156b/data/',
+                                    n_samples=n_examples,
+                                    sample_type=sample,
+                                    xray_type='lateral',
+                                    pathology='all',
+                                    fill_type='zero',
+                                    transform=transform
+                                    )
 
-frontal_train = {}
-frontal_val = {}
+print(len(frontal_dataset))
+print(len(lateral_dataset))
 
-lateral_train = {}
-lateral_val = {}
+n_train = int((1-n_split)*len(frontal_dataset))
+n_val = len(frontal_dataset) - n_train
 
-for cat in cats:
-    n_train = int((1-n_split)*len(frontal_datasets[cat]))
-    n_val = len(frontal_datasets[cat]) - n_train
-    
-    frontal_train[cat], frontal_val[cat] = random_split(frontal_datasets[cat],
-                                                        [n_train, n_val])
-    
-    n_train = int((1-n_split)*len(lateral_datasets[cat]))
-    n_val = len(lateral_datasets[cat]) - n_train
-    
-    lateral_train[cat], lateral_val[cat] = random_split(lateral_datasets[cat],
-                                                        [n_train, n_val])
-    
-    print(cat)
-    print(len(frontal_train[cat]), len(frontal_val[cat]))
-    print(len(lateral_train[cat]), len(lateral_val[cat]))
+frontal_train, frontal_val = random_split(frontal_dataset, [n_train, n_val])
 
-frontal_train_dl = {}
-frontal_val_dl = {}
+n_train = int((1-n_split)*len(lateral_dataset))
+n_val = len(lateral_dataset) - n_train
 
-lateral_train_dl = {}
-lateral_val_dl = {}
+lateral_train, lateral_val = random_split(lateral_dataset, [n_train, n_val])
 
-for cat in cats:
-    frontal_train_dl[cat] = DataLoader(frontal_train[cat],
-                                  batch_size=batch_size,
-                                  shuffle=True,
-                                  num_workers=num_workers,
-                                  pin_memory=True
-                                 )
+print(len(frontal_train), len(frontal_val))
+print(len(lateral_train), len(lateral_val))
 
-    lateral_train_dl[cat] = DataLoader(lateral_train[cat],
-                                  batch_size=batch_size,
-                                  shuffle=True,
-                                  num_workers=num_workers,
-                                  pin_memory=True
-                                 )
+frontal_train_dl = DataLoader(frontal_train,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=num_workers,
+                              pin_memory=True
+                              )
 
-    frontal_val_dl[cat] = DataLoader(frontal_val[cat],
-                                batch_size=batch_size,
-                                shuffle=False,
-                                num_workers=num_workers,
-                                pin_memory=True
-                               )
+lateral_train_dl = DataLoader(lateral_train,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=num_workers,
+                              pin_memory=True
+                              )
 
-    lateral_val_dl[cat] = DataLoader(lateral_val[cat],
-                                batch_size=batch_size,
-                                shuffle=False,
-                                num_workers=num_workers,
-                                pin_memory=True
-                               )
+frontal_val_dl = DataLoader(frontal_val,
+                            batch_size=batch_size,
+                            shuffle=True,
+                            num_workers=num_workers,
+                            pin_memory=True
+                            )
 
-frontal_models = {}
-lateral_models = {}
+lateral_val_dl = DataLoader(lateral_val,
+                            batch_size=batch_size,
+                            shuffle=False,
+                            num_workers=num_workers,
+                            pin_memory=True
+                            )
 
-frontal_optimizers = {}
-lateral_optimizers = {}
+frontal_model = DenseNet()
+lateral_model = DenseNet()
 
-frontal_schedulers = {}
-lateral_schedulers = {}
+frontal_model = nn.DataParallel(frontal_model)
+lateral_model = nn.DataParallel(lateral_model)
 
-for cat in cats:
-    frontal_models[cat] = DenseNet()
-    lateral_models[cat] = DenseNet()
-    
-    frontal_models[cat] = nn.DataParallel(frontal_models[cat])
-    lateral_models[cat] = nn.DataParallel(lateral_models[cat])
-    
-    if cuda:
-        frontal_models[cat].cuda()
-        lateral_models[cat].cuda()
-    
-    frontal_optimizers[cat] = optim.Adam(frontal_models[cat].parameters(),
-                                         lr=learning_rate,
-                                         weight_decay=weight_decay)
-    
-    lateral_optimizers[cat] = optim.Adam(lateral_models[cat].parameters(),
-                                         lr=learning_rate,
-                                         weight_decay=weight_decay)
-    
-    frontal_schedulers[cat] = optim.lr_scheduler.StepLR(frontal_optimizers[cat],
-                                                        step_size=step_size,
-                                                        gamma=gamma)
-    
-    lateral_schedulers[cat] = optim.lr_scheduler.StepLR(lateral_optimizers[cat],
-                                                        step_size=step_size,
-                                                        gamma=gamma)
+if cuda:
+    frontal_model.cuda()
+    lateral_model.cuda()
 
 loss_fn = nn.MSELoss(reduction='sum')
 
-frontal_losses = {}
-lateral_losses = {}
+frontal_optimizer = optim.Adam(frontal_model.parameters(),
+                               lr=learning_rate,
+                               weight_decay=weight_decay
+                               )
 
-frontal_validation = {}
-lateral_validation = {}
+lateral_optimizer = optim.Adam(lateral_model.parameters(),
+                               lr=learning_rate,
+                               weight_decay=weight_decay
+                               )
 
-for cat in cats:
-    frontal_losses[cat] = np.zeros(n_epochs)
-    lateral_losses[cat] = np.zeros(n_epochs)
-    
-    frontal_validation[cat] = np.zeros(n_epochs)
-    lateral_validation[cat] = np.zeros(n_epochs)
+frontal_scheduler = optim.lr_scheduler.StepLR(frontal_optimizer,
+                                              step_size=step_size,
+                                              gamma=gamma
+                                              )
+
+lateral_scheduler = optim.lr_scheduler.StepLR(lateral_optimizer,
+                                              step_size=step_size,
+                                              gamma=gamma
+                                              )
+
+loss_fn = nn.MSELoss(reduction='sum')
+
+frontal_losses = np.zeros(n_epochs)
+lateral_losses = np.zeros(n_epochs)
+
+frontal_validation = np.zeros(n_epochs)
+lateral_validation = np.zeros(n_epochs)
 
 for epoch in range(n_epochs):
     print('='*25)
     print('Epoch {}/{}:'.format(epoch+1, n_epochs))
     print('='*25)
     
-    for cat in cats:
-        start_time = time.time()
+    start_time = time.time()
         
-        print('-'*25)
-        print(cat)
- 
+    print('-'*25)
         
-        frontal_models[cat].train()
+    frontal_model.train()
         
-        for i, data in enumerate(frontal_train_dl[cat]):
-            images, labels = data
-            if cuda:
-                images, labels = images.cuda(), labels.cuda()
+    for i, data in enumerate(frontal_train_dl):
+        images, labels = data
+        if cuda:
+            images, labels = images.cuda(), labels.cuda()
                 
-            frontal_optimizers[cat].zero_grad()
-            output = frontal_models[cat](images)
-            loss = loss_fn(output, labels)
+        frontal_optimizer.zero_grad()
+        output = frontal_model(images)
+        loss = loss_fn(output, labels)
                 
-            loss.backward()
-            frontal_optimizers[cat].step()
+        loss.backward()
+        frontal_optimizer.step()
             
-            frontal_losses[cat][epoch] += loss.item()
+        frontal_losses[epoch] += loss.item()
         
-        lateral_models[cat].train()
+    lateral_model.train()
         
-        for i, data in enumerate(lateral_train_dl[cat]):
-            images, labels = data
-            if cuda:
-                images, labels = images.cuda(), labels.cuda()
-            
-            lateral_optimizers[cat].zero_grad()
-            output = lateral_models[cat](images)
-            loss = loss_fn(output, labels)
-            loss.backward()
-            lateral_optimizers[cat].step()
-            
-            lateral_losses[cat][epoch] += loss.item()
+    for i, data in enumerate(lateral_train_dl):
+        images, labels = data
+        if cuda:
+            images, labels = images.cuda(), labels.cuda()
         
-        frontal_losses[cat][epoch] /= len(frontal_train_dl[cat].dataset)
-        lateral_losses[cat][epoch] /= len(lateral_train_dl[cat].dataset)
+        lateral_optimizer.zero_grad()
+        output = lateral_model(images)
+        loss = loss_fn(output, labels)
+        loss.backward()
+        lateral_optimizer.step()
         
-        print('Train Losses: {} {}'
-                .format(frontal_losses[cat][epoch], lateral_losses[cat][epoch]))
+        lateral_losses[epoch] += loss.item()
+    
+    frontal_losses[epoch] /= len(frontal_train_dl.dataset)
+    lateral_losses[epoch] /= len(lateral_train_dl.dataset)
+    
+    print('Train Losses: {} {}'
+            .format(frontal_losses[epoch], lateral_losses[epoch]))
+    
+    if len(frontal_val_dl.dataset) > 0:
+        frontal_model.eval()
+
+        with torch.no_grad():
+            for i, data in enumerate(frontal_val_dl):
+                images, labels = data
+                if cuda:
+                    images, labels = images.cuda(), labels.cuda()
+
+                output = frontal_model(images)
+
+                loss = loss_fn(output, labels)
+
+                frontal_validation[epoch] += loss.item()
         
-        if len(frontal_val_dl[cat].dataset) > 0:
-            frontal_models[cat].eval()
+        frontal_validation[epoch] /= len(frontal_val_dl.dataset)
 
-            with torch.no_grad():
-                for i, data in enumerate(frontal_val_dl[cat]):
-                    images, labels = data
-                    if cuda:
-                        images, labels = images.cuda(), labels.cuda()
+    if len(lateral_val_dl.dataset) > 0:
+        lateral_model.eval()
 
-                    output = frontal_models[cat](images)
+        with torch.no_grad():
+            for i, data in enumerate(lateral_val_dl):
+                images, labels = data
+                if cuda:
+                    images, labels = images.cuda(), labels.cuda()
 
-                    loss = loss_fn(output, labels)
+                output = lateral_model(images)
 
-                    frontal_validation[cat][epoch] += loss.item()
-            
-            frontal_validation[cat][epoch] /= len(frontal_val_dl[cat].dataset)
- 
-        if len(lateral_val_dl[cat].dataset) > 0:
-            lateral_models[cat].eval()
+                loss = loss_fn(output, labels)
 
-            with torch.no_grad():
-                for i, data in enumerate(lateral_val_dl[cat]):
-                    images, labels = data
-                    if cuda:
-                        images, labels = images.cuda(), labels.cuda()
+                lateral_validation[epoch] += loss.item()
 
-                    output = lateral_models[cat](images)
+        lateral_validation[epoch] /= len(lateral_val_dl.dataset)
 
-                    loss = loss_fn(output, labels)
+    print('Validation Losses: {} {}'
+                    .format(frontal_validation[epoch],
+                            lateral_validation[epoch]))
 
-                    lateral_validation[cat][epoch] += loss.item()
+    frontal_scheduler.step()
+    lateral_scheduler.step()
 
-            lateral_validation[cat][epoch] /= len(lateral_val_dl[cat].dataset)
-
-        print('Validation Losses: {} {}'
-                     .format(frontal_validation[cat][epoch],
-                             lateral_validation[cat][epoch]))
-
-        frontal_schedulers[cat].step()
-        lateral_schedulers[cat].step()
-
-        print('Time to run: {}'.format(time.time()-start_time))
+    print('Time to run: {}'.format(time.time()-start_time))
 
 if not os.path.exists('/home/dqin/CS156b/'+name):
     os.makedirs('/home/dqin/CS156b/'+name)
 
-for cat in cats:
-    torch.save(frontal_models[cat].state_dict(),
-               '/home/dqin/CS156b/'+
-               name+
-               '/frontal_'
-               +cat.lower().replace(' ', '_')
-               +'.pt')
-    
-    torch.save(lateral_models[cat].state_dict(),
-               '/home/dqin/CS156b/'+
-               name+
-               '/lateral_'
-               +cat.lower().replace(' ', '_')
-               +'.pt')
-    
+torch.save(frontal_model.state_dict(),
+           '/home/dqin/CS156b/'+
+           name+
+           '/frontal.pt'
+)
+
+torch.save(lateral_model.state_dict(),
+           '/home/dqin/CS156b/'+
+           name+
+           '/lateral.pt'
+)
 
 test_dataloader = utils.gen_test_dataloader(path='test_ids.csv',
                                             batch_size=1,
-                                            transform=transform)
+                                            transform=transform
+)
 
-for cat in cats:
-    frontal_models[cat].eval()
-    lateral_models[cat].eval()
+frontal_model.eval()
+lateral_model.eval()
 
 import pandas as pd
 
@@ -371,20 +313,15 @@ with torch.no_grad():
     for i, data in enumerate(test_dataloader):
         num, xray_type, image = data
         image = image.cuda()
-        
-        preds = []
 
-        for cat in cats:
-            if xray_type == 'frontal':
-                p = frontal_models[cat](image)
-            else:
-                p = lateral_models[cat](image)
+        if xray_type == 'frontal':
+            p = frontal_model(image)
+        else:
+            p = lateral_model(image)
 
-            p = p.item()
+        p = p.flatten().tolist()
 
-            preds.append(p)
-
-        out.append([num.item()] + preds)
+        out.append([num.item()] + p)
 
 out = pd.DataFrame(out, columns=cols)
 
